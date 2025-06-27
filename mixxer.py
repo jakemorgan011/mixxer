@@ -7,6 +7,7 @@ from datetime import datetime
 from queue import Queue
 from threading import Lock
 
+import threading
 import numpy as np
 import sounddevice as sd
 # for audio async (AKA) different thread
@@ -39,29 +40,46 @@ class AudioOutputDisplay(Static):
         output_waveform_here = "here"
 
 
+# thread here.
 class AudioThread:
     def __init__(self):
         self.input_queue = Queue()
         self.output_queue = Queue()
-        self.samplerate = 44100
+        self.samplerate = 48000
         self.channels = 2
-        self.blocksize = 512
+        self.blocksize = 1024
         self.stream_lock = Lock()
         self.current_input = None
         self.current_output = None
         self.input_stream = None
         self.output_stream = None
         self.running = False
+        self.processing_thread = None
+        self.buffer_to_process = []
 
     def input_callback(self, indata, frames, time, status):
         self.input_queue.put((indata.copy(),time.currentTime))
+        # doesn't seem to be breaking but i'll have to research cause this is just documentationXdeepseek slop
+        self.buffer_to_porcess = self.input_queue.get_nowait() # no wait may be uneccesary here lol.
 
     def output_callback(self, outdata, frames, time, status):
         try: 
+            # okay i see the problem here... we don't have a connection between input callback and the output_callback....
+            # i created an array we can use as a buffer but not sure if it works great. don't have time to try it yet.
             data, _ = self.output_queue.get_nowait()
             outdata[:] = data
         except:
             outdata[:] = 0
+   
+    def process_audio(self):
+        if not self.input_queue.empty():
+            audio = self.input_queue.get()
+            # replace with whatever fx and what not...
+            self.output_queue.put(audio)
+            print("audio processed")
+        else:
+            time.sleep(0.001)
+            print("input queue empty")
     
     def update_devices(self, input_device, output_device):
         with self.stream_lock:
@@ -85,7 +103,7 @@ class AudioThread:
                     callback=self.input_callback
                     )
             self.input_stream.start()
-        
+       # so callback works like this but we need a way for them to connect which might be a little tricky.... 
         if self.current_output is not None:
             self.output_stream = sd.OutputStream(
                     device=self.current_output,
@@ -95,8 +113,12 @@ class AudioThread:
                     callback=self.output_callback
                     )
             self.output_stream.start()
+            # have a feeling this doesn't work
+            self.processing_thread = threading.Thread(target=self.process_audio)
+            self.processing_thread.start()
         
         self.running = True
+        print("streams started")
 
     def _stop_streams(self):
         if self.input_stream:
@@ -109,7 +131,9 @@ class AudioThread:
             self.output_stream.close()
             self.output_stream = None
 
+
         self.running = False
+        print("stream stopped")
 
     def start(self):
         with self.stream_lock:
@@ -133,18 +157,21 @@ class MyApp(App):
     }
     #devices{
         layout: vertical;
+        border: solid black round;
+    }
+    #fx{
+        layout: horizontal;
     }
     #clock-container{
         height: 3;
-        border: solid black;
+        border: solid black round;
         background: white;
         color: black;
         content-align: center middle;
     }
     #level-container{
-        height: 92%;
         width: 12;
-        border: solid black;
+        border: solid black round;
         background: white;
         color: black;
         content-align: center middle;
@@ -157,11 +184,9 @@ class MyApp(App):
         content-align: center middle;
     }
     #input-device{
-        border: magenta;
         background: white;
     }
     #output-device{
-        border: blue;
         background: white;
     }
     #mixxer{
@@ -184,6 +209,11 @@ class MyApp(App):
             with Vertical(id="devices"):
                 yield Select(id="input-device", options=[("loading...",None)])
                 yield Select(id="output-device", options=[("loading...",None)])
+                with Horizontal(id="fx"):
+                    yield Select(id="fx-select1", options=[("FX 1",1),("Reverb",2),("EQ-3",3),("Chorus",4)])
+                    yield Select(id="fx-select2", options=[("FX 2",1),("Reverb",2),("EQ-3",3),("Chorus",4)])
+                    yield Select(id="fx-select3", options=[("FX 3",1),("Reverb",2),("EQ-3",3),("Chorus",4)])
+    
     # where you do logic init
     def on_mount(self) -> None:
         self.audio_thread = AudioThread()
@@ -208,7 +238,7 @@ class MyApp(App):
         
         self.audio_thread.start()
 
-
+    # this needs to not activate when all things are changed...
     @on(Select.Changed)
     def select_changed(self, event: Select.Changed) -> None:
         if not hasattr(self, 'audio_thread'):
