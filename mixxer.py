@@ -55,12 +55,10 @@ class AudioThread:
         self.output_stream = None
         self.running = False
         self.processing_thread = None
-        self.buffer_to_process = []
+        self.output_msg = str
 
     def input_callback(self, indata, frames, time, status):
         self.input_queue.put((indata.copy(),time.currentTime))
-        # doesn't seem to be breaking but i'll have to research cause this is just documentationXdeepseek slop
-        self.buffer_to_porcess = self.input_queue.get_nowait() # no wait may be uneccesary here lol.
 
     def output_callback(self, outdata, frames, time, status):
         try: 
@@ -68,14 +66,16 @@ class AudioThread:
             # i created an array we can use as a buffer but not sure if it works great. don't have time to try it yet.
             data, _ = self.output_queue.get_nowait()
             outdata[:] = data
+            self.output_msg = 'output_callback sucessful'
         except:
             outdata[:] = 0
    
     def process_audio(self):
         if not self.input_queue.empty():
-            audio = self.input_queue.get()
+            audio = self.input_queue.get(timeout=0.5)
             # replace with whatever fx and what not...
-            self.output_queue.put(audio)
+            processed = np.tanh(audio * 8) # random value for test...
+            self.output_queue.put(processed)
             print("audio processed")
         else:
             time.sleep(0.001)
@@ -114,7 +114,7 @@ class AudioThread:
                     )
             self.output_stream.start()
             # have a feeling this doesn't work
-            self.processing_thread = threading.Thread(target=self.process_audio)
+            self.processing_thread = threading.Thread(target=self.process_audio, daemon=True)
             self.processing_thread.start()
         
         self.running = True
@@ -133,7 +133,7 @@ class AudioThread:
 
 
         self.running = False
-        print("stream stopped")
+        #print("stream stopped")
 
     def start(self):
         with self.stream_lock:
@@ -213,6 +213,8 @@ class MyApp(App):
                     yield Select(id="fx-select1", options=[("FX 1",1),("Reverb",2),("EQ-3",3),("Chorus",4)])
                     yield Select(id="fx-select2", options=[("FX 2",1),("Reverb",2),("EQ-3",3),("Chorus",4)])
                     yield Select(id="fx-select3", options=[("FX 3",1),("Reverb",2),("EQ-3",3),("Chorus",4)])
+                with Vertical(id="debug"):
+                    yield Label("loading...",id="debug-label")
     
     # where you do logic init
     def on_mount(self) -> None:
@@ -236,6 +238,8 @@ class MyApp(App):
         self.title = "textual hellow world"
         self.sub_title = "simple tui example"
         
+        self.check_msg()
+
         self.audio_thread.start()
 
     # this needs to not activate when all things are changed...
@@ -250,7 +254,15 @@ class MyApp(App):
 
         if input_dev is not None or output_dev is not None:
             self.audio_thread.update_devices(input_dev,output_dev)
-        
+       
+    async def check_msg(self):
+        while True:
+            label = self.query_one("#debug-label")
+            try:
+                label.update(self.audio_thread.output_msg)
+            except:
+                print('label not updating properly')
+
 
     def on_unmount(self):
         if hasattr(self, 'audio_thread'):
